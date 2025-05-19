@@ -1,0 +1,2 @@
+A:\code\mcserver_creator\bin\Release\net9.0\win-x64\publish\mcserver_creator.pdb
+A:\code\mcserver_creator\bin\Release\net9.0\win-x64\publish\mcserver_creator.exe
