@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Collections.Generic;
 using System.Net.Http;
@@ -6,43 +6,50 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System.Diagnostics;
 using System.Linq;
+using Spectre.Console;
 
 class Program
 {
+    static string EscapeMarkup(string text)
+    {
+        return text?.Replace("[", "[[").Replace("]", "]]");
+    }
     static string ServersFolder = "./servers";
     static string DatabaseFile = "./servers/servers.json";
     static Dictionary<string, Dictionary<string, string>> Database = new Dictionary<string, Dictionary<string, string>>();
 
-    static void Main(string[] args)
+    static async Task Main(string[] args)
     {
+
         Initialize();
 
         while (true)
         {
-            ClearConsole();
-            Console.WriteLine("=== Minecraft Server Manager ===");
-            Console.WriteLine("1. Create MC Server");
-            Console.WriteLine("2. Manage MC Servers");
-            Console.WriteLine("3. Exit");
-            Console.Write("Select an option: ");
-
-            string input = Console.ReadLine();
+            AnsiConsole.Clear();
+            AnsiConsole.Write(
+                new FigletText("MC Server Manager")
+                    .Centered()
+                    .Color(Color.Green));
+            var input = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("[yellow]Select an option:[/]")
+                    .AddChoices(new[] {
+                "Create MC Server",
+                "Manage MC Servers",
+                "Exit"
+                    }));
 
             switch (input)
             {
-                case "1":
-                    CreateMcServer().Wait();
+                case "Create MC Server":
+                    await CreateMcServer();
                     break;
-                case "2":
+                case "Manage MC Servers":
                     ManageServers();
                     break;
-                case "3":
+                case "Exit":
                     SaveDatabase();
                     return;
-                default:
-                    Console.WriteLine("Invalid option. Press any key to continue.");
-                    Console.ReadKey();
-                    break;
             }
         }
     }
@@ -51,47 +58,57 @@ class Program
     {
         while (true)
         {
-            ClearConsole();
-            Console.WriteLine("=== List of Minecraft Servers ===");
+            AnsiConsole.Clear();
+            AnsiConsole.MarkupLine("[bold underline]List of Minecraft Servers[/]");
             if (Database.Count == 0)
             {
-                Console.WriteLine("No servers found. Press any key to return.");
+                AnsiConsole.MarkupLine("[red]No servers found. Press any key to return.[/]");
                 Console.ReadKey();
                 return;
             }
 
             var serverList = new List<string>(Database.Keys);
-            for (int i = 0; i < serverList.Count; i++)
-            {
-                var data = Database[serverList[i]];
-                bool online = IsServerOnline(serverList[i]);
-                if (online)
-                {
-                    Console.ForegroundColor = ConsoleColor.Green;
-                    Console.Write("● Online ");
-                }
-                else
-                {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.Write("● Offline ");
-                }
-                Console.ResetColor();
-                Console.WriteLine($"{i + 1}. {serverList[i]} ({data["type"]} - {data["version"]})");
-            }
-            Console.Write("\nSelect server number or press Enter to return: ");
-            string input = Console.ReadLine();
-            if (string.IsNullOrWhiteSpace(input)) return;
 
-            if (int.TryParse(input, out int selected) && selected > 0 && selected <= serverList.Count)
+            var table = new Table().Border(TableBorder.Rounded)
+                .AddColumn("Name")
+                .AddColumn("Status")
+                .AddColumn("Type")
+                .AddColumn("Version");
+
+            foreach (var name in serverList)
             {
-                string serverName = serverList[selected - 1];
-                ServerMenu(serverName);
+                var data = Database[name];
+                bool online = IsServerOnline(name);
+                table.AddRow(
+                    $"[bold]{name}[/]",
+                    online ? "[green]● Online[/]" : "[red]● Offline[/]",
+                    data["type"],
+                    data["version"]
+                );
             }
-            else
-            {
-                Console.WriteLine("Invalid selection. Press any key to continue.");
-                Console.ReadKey();
-            }
+            AnsiConsole.Write(table);
+
+            var selectList = new List<string>(serverList) { "Exit" };
+
+            var selected = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("[yellow]Select a server to manage or [red]Exit[/] to return:[/]")
+                    .PageSize(10)
+                    .AddChoices(selectList)
+                    .UseConverter(name =>
+                    {
+                        if (name == "Exit")
+                            return "[red]Exit[/]";
+                        var data = Database[name];
+                        bool online = IsServerOnline(name);
+                        return $"{name}  |  {(online ? "[green]Online[/]" : "[red]Offline[/]")}  |  {data["type"]}  |  {data["version"]}";
+                    })
+            );
+
+            if (string.IsNullOrWhiteSpace(selected) || selected == "Exit")
+                return;
+
+            ServerMenu(selected);
         }
     }
 
@@ -99,49 +116,44 @@ class Program
     {
         while (true)
         {
-            ClearConsole();
+            AnsiConsole.Clear();
             var data = Database[serverName];
             bool online = IsServerOnline(serverName);
-            if (online)
-            {
-                Console.ForegroundColor = ConsoleColor.Green;
-                Console.Write("● Online ");
-            }
-            else
-            {
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.Write("● Offline ");
-            }
-            Console.ResetColor();
-            Console.WriteLine($"=== {serverName} ({data["type"]} - {data["version"]}) ===");
-            Console.WriteLine("1. Start Server");
-            Console.WriteLine("2. Settings");
-            Console.WriteLine("3. Update Server");
-            Console.WriteLine("4. Delete Server");
-            Console.WriteLine("5. Back");
-            Console.Write("Select an option: ");
-            string input = Console.ReadLine();
 
-            switch (input)
+            var panel = new Panel(
+                $"[bold]{serverName}[/] ([blue]{data["type"]}[/] - [yellow]{data["version"]}[/])\n" +
+                (online ? "[green]● Online[/]" : "[red]● Offline[/]"))
+                .Header("Server Info", Justify.Center)
+                .BorderColor(online ? Color.Green : Color.Red);
+            AnsiConsole.Write(panel);
+
+            var choice = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("[yellow]Select an action:[/]")
+                    .AddChoices(new[] {
+                    "Start Server",
+                    "Settings",
+                    "Update Server",
+                    "Delete Server",
+                    "Back"
+                    }));
+
+            switch (choice)
             {
-                case "1":
+                case "Start Server":
                     StartServer(serverName);
                     break;
-                case "2":
+                case "Settings":
                     ServerSettings(serverName);
                     break;
-                case "3":
+                case "Update Server":
                     UpdateServer(serverName).Wait();
                     break;
-                case "4":
+                case "Delete Server":
                     DeleteServer(serverName);
-                    break;
-                case "5":
                     return;
-                default:
-                    Console.WriteLine("Invalid option. Press any key to continue.");
-                    Console.ReadKey();
-                    break;
+                case "Back":
+                    return;
             }
         }
     }
@@ -445,41 +457,34 @@ class Program
     static void ServerSettings(string serverName)
     {
         var data = Database[serverName];
-        var history = new List<(string, ConsoleColor)>();
+        var history = new List<(string, Color)>();
         while (true)
         {
-            ClearConsole();
-            Console.WriteLine($"=== Settings for {serverName} ===");
-            Console.WriteLine();
+            AnsiConsole.Clear();
+            AnsiConsole.MarkupLine($"[bold underline]Settings for {serverName}[/]");
             string ram = data.ContainsKey("ram") ? data["ram"] : "1024";
             string console = data.ContainsKey("console") ? data["console"] : "true";
             string port = data.ContainsKey("port") ? data["port"] : "25565";
             string jarFile = data["jar"];
             string startCmd = $"java -Xmx{ram}M -Xms{ram}M -jar \"{jarFile}\" nogui --port {port}";
-            Console.WriteLine($"Start command:");
-            Console.WriteLine(startCmd);
-            Console.WriteLine();
+            AnsiConsole.MarkupLine($"[grey]Start command:[/] [blue]{startCmd}[/]");
 
             // EULA accept info
             bool eulaAccepted = data.ContainsKey("eula_accepted") && data["eula_accepted"] == "true";
             if (!eulaAccepted)
             {
-                Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine("EULA is NOT accepted! Type 'eula accept' to accept and start the server.");
-                Console.ResetColor();
+                AnsiConsole.MarkupLine("[yellow]EULA is NOT accepted! Type 'eula accept' to accept and start the server.[/]");
             }
 
             // Print command history with color
             if (history.Count > 0)
             {
-                Console.WriteLine("─────────────────────────────────────────────");
+                AnsiConsole.Write(new Rule());
                 foreach (var (msg, color) in history)
                 {
-                    Console.ForegroundColor = color;
-                    Console.WriteLine(msg);
+                    AnsiConsole.MarkupLine($"[{color.ToString().ToLower()}]{msg}[/]");
                 }
-                Console.ResetColor();
-                Console.WriteLine("─────────────────────────────────────────────");
+                AnsiConsole.Write(new Rule());
             }
 
             // Detect plugins or mods folder
@@ -488,9 +493,8 @@ class Program
             bool hasPlugins = Directory.Exists(pluginsDir);
             bool hasMods = Directory.Exists(modsDir);
 
-            Console.WriteLine("Type a command (help, back):");
-            Console.Write("> ");
-            string input = Console.ReadLine();
+            AnsiConsole.MarkupLine("[grey]Type a command (help, back):[/]");
+            string input = AnsiConsole.Ask<string>("> ");
             if (string.IsNullOrWhiteSpace(input)) continue;
             var parts = input.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length == 0) continue;
@@ -539,51 +543,59 @@ class Program
 
             if (parts[0].ToLower() == "help")
             {
-                var helpBlocks = new List<(string title, ConsoleColor color, string body)>
-            {
-                ("--- Server Start Commands ---", ConsoleColor.Cyan,
-@"  ram <MB>                - Set RAM in MB (e.g. ram 2048)
-  console <true/false>    - Show or hide server console
-  port <5-digit>          - Set server port (must be 5 digits, e.g. 25565)"),
-                ("--- Server Properties Commands ---", ConsoleColor.Cyan,
-@"  onlinemode <true/false> - Set online-mode in server.properties
-  playerlimit <number>    - Set max-players in server.properties
-  motd <text>             - Set motd in server.properties"),
-                ("--- General ---", ConsoleColor.Cyan,
-@"  back                    - Return to previous menu
-  help                    - Show this help
-  eula accept             - Accept Minecraft EULA and start server")
-            };
+                AnsiConsole.Clear();
+                AnsiConsole.Write(
+                    new Panel("[bold yellow]Server Settings Help[/]")
+                        .Border(BoxBorder.Rounded)
+                        .Header("Help", Justify.Center)
+                        .Padding(1, 1, 1, 1)
+                );
+
+                var table = new Table()
+                    .Border(TableBorder.Rounded)
+                    .Title("[bold]General Commands[/]")
+                    .AddColumn("[cyan]Command[/]")
+                    .AddColumn("[grey]Description[/]");
+
+                table.AddRow("[green]back[/]", "Return to previous menu");
+                table.AddRow("[green]help[/]", "Show this help");
+                table.AddRow("[green]eula accept[/]", "Accept Minecraft EULA and start server");
+
+                table.AddRow("[green]ram <MB>[/]", "Set RAM in MB (e.g. ram 2048)");
+                table.AddRow("[green]console <true/false>[/]", "Show or hide server console");
+                table.AddRow("[green]port <5-digit>[/]", "Set server port (e.g. 25565)");
+
+                table.AddRow("[green]onlinemode <true/false>[/]", "Set online-mode in server.properties");
+                table.AddRow("[green]playerlimit <number>[/]", "Set max-players in server.properties");
+                table.AddRow("[green]motd <text>[/]", "Set motd in server.properties");
+                table.AddRow("[green]show[/]", "Show current RAM and port");
 
                 if (hasPlugins)
                 {
-                    helpBlocks.Add((
-                        "--- Plugins ---", ConsoleColor.Cyan,
-    @"  plugin add <url> [filename]    - Download plugin jar to plugins/
-  plugin remove <plugin>         - Remove plugin jar from plugins/
-  plugin show                    - Show all plugins in plugins/"));
+                    table.AddEmptyRow();
+                    table.AddRow("[bold yellow]--- Plugins ---[/]", "");
+                    table.AddRow("[green]plugin add <url> [filename][/]", "Download plugin jar to plugins/");
+                    table.AddRow("[green]plugin remove <plugin>[/]", "Remove plugin jar from plugins/");
+                    table.AddRow("[green]plugin show[/]", "Show all plugins in plugins/");
                 }
                 if (hasMods)
                 {
-                    helpBlocks.Add((
-                        "--- Mods ---", ConsoleColor.Cyan,
-    @"  mod add <url> [filename]      - Download mod jar to mods/
-  mod remove <mod>              - Remove mod jar from mods/
-  mod show                      - Show all mods in mods/"));
+                    table.AddEmptyRow();
+                    table.AddRow("[bold yellow]--- Mods ---[/]", "");
+                    table.AddRow("[green]mod add <url> [filename][/]", "Download mod jar to mods/");
+                    table.AddRow("[green]mod remove <mod>[/]", "Remove mod jar from mods/");
+                    table.AddRow("[green]mod show[/]", "Show all mods in mods/");
                 }
 
-                history.Add(("", ConsoleColor.White));
-                foreach (var (title, color, body) in helpBlocks)
-                {
-                    history.Add((title, color));
-                    foreach (var line in body.Split('\n'))
-                        history.Add((line, ConsoleColor.Gray));
-                    history.Add(("", ConsoleColor.White));
-                }
+                AnsiConsole.Write(table);
+
+                AnsiConsole.MarkupLine("\n[grey]Press any key to return to settings...[/]");
+                Console.ReadKey();
                 continue;
             }
 
             // --- Server Properties Commands ---
+
             string propertiesPath = Path.Combine(data["server_path"], "server.properties");
             if (parts[0].ToLower() == "onlinemode" && parts.Length == 2 && (parts[1].ToLower() == "true" || parts[1].ToLower() == "false"))
             {
@@ -610,6 +622,19 @@ class Program
                 {
                     history.Add(("server.properties not found.", ConsoleColor.Red));
                 }
+                continue;
+            }
+            if (parts[0].ToLower() == "show")
+            {
+                string ramShow = data.ContainsKey("ram") ? data["ram"] : "1024";
+                string portShow = data.ContainsKey("port") ? data["port"] : "25565";
+                string typeVal = data.ContainsKey("type") ? data["type"] : "unknown";
+                string versionVal = data.ContainsKey("version") ? data["version"] : "unknown";
+                string status = IsServerOnline(serverName) ? "[green]Online[/]" : "[red]Offline[/]";
+                history.Add((
+                    $"Status: {status}\nType: {typeVal}\nVersion: {versionVal}\nRAM: {ramShow} MB\nPort: {portShow}",
+                    ConsoleColor.Cyan
+                ));
                 continue;
             }
             if (parts[0].ToLower() == "playerlimit" && parts.Length == 2 && int.TryParse(parts[1], out int limit))
@@ -903,14 +928,13 @@ class Program
     }
     static async Task CreateMcServer()
     {
-        ClearConsole();
-        Console.WriteLine("=== Create Minecraft Server ===");
-        Console.Write("Enter server name: ");
-        string name = Console.ReadLine();
+        AnsiConsole.Clear();
+        AnsiConsole.Write(new Rule("[bold green]Create Minecraft Server[/]").RuleStyle("green"));
+        string name = AnsiConsole.Ask<string>("Enter server name:");
 
         if (string.IsNullOrWhiteSpace(name) || Database.ContainsKey(name))
         {
-            Console.WriteLine("Invalid or duplicate server name. Press any key to return.");
+            AnsiConsole.MarkupLine("[red]Invalid or duplicate server name. Press any key to return.[/]");
             Console.ReadKey();
             return;
         }
@@ -919,13 +943,10 @@ class Program
         if (!Directory.Exists(serverPath))
             Directory.CreateDirectory(serverPath);
 
-        Console.WriteLine("\nSelect server type:");
-        Console.WriteLine("1. Vanilla");
-        Console.WriteLine("2. Paper");
-        Console.WriteLine("3. Custom Loader");
-        Console.Write("Type: ");
-        string typeInput = Console.ReadLine();
-        string type = typeInput == "2" ? "Paper" : typeInput == "3" ? "Custom" : "Vanilla";
+        var type = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Select server type:")
+                .AddChoices("Vanilla", "Paper", "Custom Loader"));
 
         string jarFileName = "";
         string jarPath = "";
@@ -933,18 +954,15 @@ class Program
         string executablePath = "";
         string selectedType = type;
 
-        if (type == "Custom")
+        if (type == "Custom Loader")
         {
-            Console.Write("Enter loader name (e.g. Mohist, Purpur, etc): ");
-            string loaderName = Console.ReadLine().Trim();
-            Console.Write("Enter Minecraft version (e.g. 1.20.4): ");
-            string mcVersion = Console.ReadLine().Trim();
-            Console.Write("Provide direct URL to the .jar file for your loader: ");
-            string loaderUrl = Console.ReadLine().Trim();
+            string loaderName = AnsiConsole.Ask<string>("Enter loader name (e.g. Mohist, Purpur, etc):");
+            string mcVersion = AnsiConsole.Ask<string>("Enter Minecraft version (e.g. 1.20.4):");
+            string loaderUrl = AnsiConsole.Ask<string>("Provide direct URL to the .jar file for your loader:");
 
             if (string.IsNullOrWhiteSpace(loaderName) || string.IsNullOrWhiteSpace(mcVersion) || string.IsNullOrWhiteSpace(loaderUrl))
             {
-                Console.WriteLine("Invalid input. Press any key to return.");
+                AnsiConsole.MarkupLine("[red]Invalid input. Press any key to return.[/]");
                 Console.ReadKey();
                 return;
             }
@@ -956,53 +974,47 @@ class Program
             {
                 try
                 {
-                    Console.WriteLine($"\nDownloading loader jar as {jarFileName}...\n");
-                    using (var response = await client.GetAsync(loaderUrl, HttpCompletionOption.ResponseHeadersRead))
-                    {
-                        response.EnsureSuccessStatusCode();
-                        var total = response.Content.Headers.ContentLength ?? -1L;
-                        var canReportProgress = total != -1;
-                        var buffer = new byte[8192];
-                        long read = 0;
-                        int readCount;
-                        using (var stream = await response.Content.ReadAsStreamAsync())
-                        using (var fs = new FileStream(jarPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                    AnsiConsole.MarkupLine($"\n[grey]Downloading loader jar as {jarFileName}...[/]\n");
+                    await AnsiConsole.Status()
+                        .StartAsync("Downloading...", async ctx =>
                         {
-                            while ((readCount = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                            using (var response = await client.GetAsync(loaderUrl, HttpCompletionOption.ResponseHeadersRead))
                             {
-                                await fs.WriteAsync(buffer, 0, readCount);
-                                read += readCount;
-                                if (canReportProgress)
+                                response.EnsureSuccessStatusCode();
+                                var total = response.Content.Headers.ContentLength ?? -1L;
+                                var buffer = new byte[8192];
+                                long read = 0;
+                                int readCount;
+                                using (var stream = await response.Content.ReadAsStreamAsync())
+                                using (var fs = new FileStream(jarPath, FileMode.Create, FileAccess.Write, FileShare.None))
                                 {
-                                    DrawProgressBar((double)read / total, 50);
+                                    while ((readCount = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                                    {
+                                        await fs.WriteAsync(buffer, 0, readCount);
+                                        read += readCount;
+                                        if (total > 0)
+                                        {
+                                            ctx.Status($"Downloading... {read / 1024} KB / {total / 1024} KB");
+                                        }
+                                    }
                                 }
                             }
-                        }
-                        if (canReportProgress)
-                        {
-                            DrawProgressBar(1, 50);
-                            Console.WriteLine();
-                        }
-                    }
+                        });
                 }
                 catch
                 {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine("\nDownload failed or the file is corrupted!");
-                    Console.ResetColor();
-                    Console.WriteLine("Operation cancelled. Press any key to return.");
+                    AnsiConsole.MarkupLine("[red]\nDownload failed or the file is corrupted![/]");
+                    AnsiConsole.MarkupLine("[red]Operation cancelled. Press any key to return.[/]");
                     Console.ReadKey();
                     return;
                 }
             }
 
-            Console.WriteLine("\nHow do you want to start your loader?");
-            Console.WriteLine("Write the full command as you would in terminal/cmd.");
-            Console.WriteLine("Use <loader> where the loader jar path should be (example: java -Xmx2G -jar <loader> nogui)");
-            Console.Write("Start command (leave empty for default): ");
-            string startCmd = Console.ReadLine();
+            AnsiConsole.MarkupLine("\nHow do you want to start your loader?");
+            AnsiConsole.MarkupLine("Write the full command as you would in terminal/cmd.");
+            AnsiConsole.MarkupLine("Use <loader> where the loader jar path should be (example: java -Xmx2G -jar <loader> nogui)");
+            string startCmd = AnsiConsole.Ask<string>("Start command (leave empty for default):");
 
-            // If empty, use default MC server start command
             if (string.IsNullOrWhiteSpace(startCmd))
             {
                 startCmd = $"java -Xmx1024M -Xms1024M -jar <loader> nogui";
@@ -1010,12 +1022,11 @@ class Program
 
             if (!startCmd.Contains("<loader>"))
             {
-                Console.WriteLine("You must use <loader> in your command. Press any key to return.");
+                AnsiConsole.MarkupLine("[red]You must use <loader> in your command. Press any key to return.[/]");
                 Console.ReadKey();
                 return;
             }
 
-            // Replace <loader> with full path to jar
             string realCmd = startCmd.Replace("<loader>", $"\"{jarFileName}\"");
 
             versionString = mcVersion;
@@ -1023,27 +1034,26 @@ class Program
             selectedType = loaderName;
 
             var dbData = new Dictionary<string, string>
-    {
-        { "type", selectedType },
-        { "version", versionString },
-        { "jar", jarFileName },
-        { "server_path", serverPath },
-        { "executable_path", executablePath },
-        { "eula_accepted", "false" },
-        { "eula_path", "" },
-        { "custom_start_cmd", startCmd }
-    };
+        {
+            { "type", selectedType },
+            { "version", versionString },
+            { "jar", jarFileName },
+            { "server_path", serverPath },
+            { "executable_path", executablePath },
+            { "eula_accepted", "false" },
+            { "eula_path", "" },
+            { "custom_start_cmd", startCmd }
+        };
             Database[name] = dbData;
             SaveDatabase();
 
-            Console.WriteLine("\nStarting the server for the first time...\n");
+            AnsiConsole.MarkupLine("\n[grey]Starting the server for the first time...[/]\n");
 
             bool eulaAccepted = false;
             string eulaPath = Path.Combine(serverPath, "eula.txt");
 
             while (true)
             {
-                // Split command for ProcessStartInfo
                 var cmdParts = realCmd.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
                 var process = new Process();
                 process.StartInfo.FileName = cmdParts[0];
@@ -1060,7 +1070,7 @@ class Program
                 {
                     if (!string.IsNullOrEmpty(e.Data))
                     {
-                        Console.WriteLine(e.Data);
+                        AnsiConsole.MarkupLine(EscapeMarkup(e.Data));
                         lastOutput = DateTime.Now;
                     }
                 };
@@ -1068,7 +1078,7 @@ class Program
                 {
                     if (!string.IsNullOrEmpty(e.Data))
                     {
-                        Console.WriteLine(e.Data);
+                        AnsiConsole.MarkupLine(EscapeMarkup(e.Data));
                         lastOutput = DateTime.Now;
                     }
                 };
@@ -1082,7 +1092,7 @@ class Program
                     await Task.Delay(200);
                     if (!messageShown && (DateTime.Now - lastOutput).TotalMilliseconds > 1500)
                     {
-                        Console.WriteLine("\n[CSharp]");
+                        AnsiConsole.MarkupLine("\n[grey]C#[/]");
                         messageShown = true;
                     }
                 }
@@ -1092,10 +1102,9 @@ class Program
                     string eulaContent = File.ReadAllText(eulaPath);
                     if (eulaContent.Contains("eula=false"))
                     {
-                        Console.WriteLine("\nYou must accept the Minecraft EULA to run the server.");
-                        Console.Write("Do you want to accept the EULA now? (yes/no): ");
-                        string input = Console.ReadLine();
-                        if (input.Trim().ToLower() == "yes")
+                        AnsiConsole.MarkupLine("\n[yellow]You must accept the Minecraft EULA to run the server.[/]");
+                        bool accept = AnsiConsole.Confirm("Do you want to accept the EULA now?");
+                        if (accept)
                         {
                             File.WriteAllText(eulaPath, "eula=true");
                             dbData["eula_accepted"] = "true";
@@ -1103,12 +1112,12 @@ class Program
                             Database[name] = dbData;
                             SaveDatabase();
                             eulaAccepted = true;
-                            Console.WriteLine("\nEULA accepted. Restarting the server...\n");
+                            AnsiConsole.MarkupLine("\n[green]EULA accepted. Restarting the server...[/]\n");
                             continue;
                         }
                         else
                         {
-                            Console.WriteLine("EULA not accepted. Server will not start.");
+                            AnsiConsole.MarkupLine("[red]EULA not accepted. Server will not start.[/]");
                         }
                     }
                     else if (eulaContent.Contains("eula=true"))
@@ -1117,8 +1126,8 @@ class Program
                         dbData["eula_path"] = eulaPath;
                         Database[name] = dbData;
                         SaveDatabase();
-                        Console.WriteLine("\nServer stopped. You can now manage your server from the menu.");
-                        Console.WriteLine("\nPress any key to return to the menu.");
+                        AnsiConsole.MarkupLine("\n[green]Server stopped. You can now manage your server from the menu.[/]");
+                        AnsiConsole.MarkupLine("\n[grey]Press any key to return to the menu.[/]");
                     }
                 }
                 break;
@@ -1137,170 +1146,124 @@ class Program
 
         if (versions == null || versions.Count == 0)
         {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine("Could not fetch versions or no versions available. Press any key to return.");
-            Console.ResetColor();
+            AnsiConsole.MarkupLine("[red]Could not fetch versions or no versions available. Press any key to return.[/]");
             Console.ReadKey();
             return;
         }
 
-        string jarFileName2 = "";
-        string jarPath2 = "";
-        string versionString2 = "";
-        string executablePath2 = "";
-        string selectedType2 = type;
-
-        Console.WriteLine($"\nAvailable {type} Versions (release only):\n");
-
-        int windowWidth = Console.WindowWidth;
-        int colWidth2 = 18;
-        int columns2 = Math.Max(1, windowWidth / colWidth2);
-        int rows2 = (int)Math.Ceiling(versions.Count / (double)columns2);
-
-        for (int row = 0; row < rows2; row++)
+        var versionChoices = versions.Select((v, i) => $"{i + 1}. {v.version}").ToList();
+        var selectedVersion = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title($"[yellow]Select {type} version:[/]")
+                .PageSize(10)
+                .AddChoices(versionChoices));
+        int vIndex = versionChoices.IndexOf(selectedVersion);
+        if (vIndex < 0 || vIndex >= versions.Count)
         {
-            for (int col = 0; col < columns2; col++)
-            {
-                int idx = row + col * rows2;
-                if (idx < versions.Count)
-                {
-                    string label = $"{idx + 1}. {versions[idx].version}";
-                    Console.Write(label.PadRight(colWidth2));
-                }
-            }
-            Console.WriteLine();
-        }
-
-        Console.Write("\nEnter version number: ");
-        string vInput = Console.ReadLine();
-        int vIndex;
-        if (!int.TryParse(vInput, out vIndex) || vIndex < 1 || vIndex > versions.Count)
-        {
-            Console.WriteLine("Invalid version. Press any key to return.");
+            AnsiConsole.MarkupLine("[red]Invalid version. Press any key to return.[/]");
             Console.ReadKey();
             return;
         }
-        var selectedVer = versions[vIndex - 1];
+        var selectedVer = versions[vIndex];
 
         string vJarUrl = selectedVer.url;
-        jarFileName2 = $"{type.ToLower()}-{selectedVer.version}.jar";
-        jarPath2 = Path.Combine(serverPath, jarFileName2);
+        jarFileName = $"{type.ToLower()}-{selectedVer.version}.jar";
+        jarPath = Path.Combine(serverPath, jarFileName);
 
-        bool downloadOk = false;
         using (HttpClient client = new HttpClient())
         {
             try
             {
-                Console.WriteLine($"\nDownloading server jar as {jarFileName2}...\n");
-                using (var response = await client.GetAsync(vJarUrl, HttpCompletionOption.ResponseHeadersRead))
-                {
-                    response.EnsureSuccessStatusCode();
-                    var total = response.Content.Headers.ContentLength ?? -1L;
-                    var canReportProgress = total != -1;
-                    var buffer = new byte[8192];
-                    long read = 0;
-                    int readCount;
-                    using (var stream = await response.Content.ReadAsStreamAsync())
-                    using (var fs = new FileStream(jarPath2, FileMode.Create, FileAccess.Write, FileShare.None))
+                AnsiConsole.MarkupLine($"\n[grey]Downloading server jar as {jarFileName}...[/]\n");
+                await AnsiConsole.Status()
+                    .StartAsync("Downloading...", async ctx =>
                     {
-                        while ((readCount = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                        using (var response = await client.GetAsync(vJarUrl, HttpCompletionOption.ResponseHeadersRead))
                         {
-                            await fs.WriteAsync(buffer, 0, readCount);
-                            read += readCount;
-                            if (canReportProgress)
+                            response.EnsureSuccessStatusCode();
+                            var total = response.Content.Headers.ContentLength ?? -1L;
+                            var buffer = new byte[8192];
+                            long read = 0;
+                            int readCount;
+                            using (var stream = await response.Content.ReadAsStreamAsync())
+                            using (var fs = new FileStream(jarPath, FileMode.Create, FileAccess.Write, FileShare.None))
                             {
-                                DrawProgressBar((double)read / total, 50);
+                                while ((readCount = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                                {
+                                    await fs.WriteAsync(buffer, 0, readCount);
+                                    read += readCount;
+                                    if (total > 0)
+                                    {
+                                        ctx.Status($"Downloading... {read / 1024} KB / {total / 1024} KB");
+                                    }
+                                }
                             }
                         }
-                    }
-                    if (canReportProgress)
-                    {
-                        DrawProgressBar(1, 50);
-                        Console.WriteLine();
-                    }
-                    downloadOk = true;
-                }
+                    });
             }
             catch
             {
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine("\nDownload failed or the file is corrupted!");
-                Console.ResetColor();
-                Console.Write("Do you have a direct URL to the .jar file? (y/n): ");
-                string answer = Console.ReadLine().Trim().ToLower();
-                if (answer == "y" || answer == "yes")
+                AnsiConsole.MarkupLine("[red]\nDownload failed or the file is corrupted![/]");
+                bool hasUrl = AnsiConsole.Confirm("Do you have a direct URL to the .jar file?");
+                if (hasUrl)
                 {
-                    Console.Write("Paste the direct URL to the .jar file: ");
-                    vJarUrl = Console.ReadLine().Trim();
-                    jarFileName2 = Path.GetFileName(new Uri(vJarUrl).AbsolutePath);
-                    jarPath2 = Path.Combine(serverPath, jarFileName2);
+                    vJarUrl = AnsiConsole.Ask<string>("Paste the direct URL to the .jar file:");
+                    jarFileName = Path.GetFileName(new Uri(vJarUrl).AbsolutePath);
+                    jarPath = Path.Combine(serverPath, jarFileName);
 
                     using (var response = await client.GetAsync(vJarUrl, HttpCompletionOption.ResponseHeadersRead))
                     {
                         response.EnsureSuccessStatusCode();
                         var total = response.Content.Headers.ContentLength ?? -1L;
-                        var canReportProgress = total != -1;
                         var buffer = new byte[8192];
                         long read = 0;
                         int readCount;
                         using (var stream = await response.Content.ReadAsStreamAsync())
-                        using (var fs = new FileStream(jarPath2, FileMode.Create, FileAccess.Write, FileShare.None))
+                        using (var fs = new FileStream(jarPath, FileMode.Create, FileAccess.Write, FileShare.None))
                         {
                             while ((readCount = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
                             {
                                 await fs.WriteAsync(buffer, 0, readCount);
                                 read += readCount;
-                                if (canReportProgress)
-                                {
-                                    DrawProgressBar((double)read / total, 50);
-                                }
                             }
                         }
-                        if (canReportProgress)
-                        {
-                            DrawProgressBar(1, 50);
-                            Console.WriteLine();
-                        }
                     }
-                    downloadOk = true;
                 }
                 else
                 {
-                    Console.WriteLine("Operation cancelled. Press any key to return.");
+                    AnsiConsole.MarkupLine("[red]Operation cancelled. Press any key to return.[/]");
                     Console.ReadKey();
                     return;
                 }
             }
         }
 
-        versionString2 = selectedVer.version;
-        executablePath2 = jarPath2;
-        selectedType2 = type;
+        versionString = selectedVer.version;
+        executablePath = jarPath;
+        selectedType = type;
 
-    AcceptEulaAndStart:
         var dbData2 = new Dictionary<string, string>
     {
-        { "type", selectedType2 },
-        { "version", versionString2 },
-        { "jar", jarFileName2 },
+        { "type", selectedType },
+        { "version", versionString },
+        { "jar", jarFileName },
         { "server_path", serverPath },
-        { "executable_path", executablePath2 },
+        { "executable_path", executablePath },
         { "eula_accepted", "false" },
         { "eula_path", "" }
     };
         Database[name] = dbData2;
         SaveDatabase();
 
-        Console.WriteLine("\nStarting the server for the first time...\n");
+        AnsiConsole.MarkupLine("\n[grey]Starting the server for the first time...[/]\n");
 
-        bool eulaAccepted2 = false;
         string eulaPath2 = Path.Combine(serverPath, "eula.txt");
 
         while (true)
         {
             var process = new Process();
             process.StartInfo.FileName = "java";
-            process.StartInfo.Arguments = $"-Xmx1024M -Xms1024M -jar \"{jarFileName2}\" nogui";
+            process.StartInfo.Arguments = $"-Xmx1024M -Xms1024M -jar \"{jarFileName}\" nogui";
             process.StartInfo.WorkingDirectory = serverPath;
             process.StartInfo.RedirectStandardOutput = true;
             process.StartInfo.RedirectStandardError = true;
@@ -1313,7 +1276,7 @@ class Program
             {
                 if (!string.IsNullOrEmpty(e.Data))
                 {
-                    Console.WriteLine(e.Data);
+                    AnsiConsole.MarkupLine(EscapeMarkup(e.Data));
                     lastOutput = DateTime.Now;
                 }
             };
@@ -1321,7 +1284,7 @@ class Program
             {
                 if (!string.IsNullOrEmpty(e.Data))
                 {
-                    Console.WriteLine(e.Data);
+                    AnsiConsole.MarkupLine(EscapeMarkup(e.Data));
                     lastOutput = DateTime.Now;
                 }
             };
@@ -1335,7 +1298,7 @@ class Program
                 await Task.Delay(200);
                 if (!messageShown && (DateTime.Now - lastOutput).TotalMilliseconds > 1500)
                 {
-                    Console.WriteLine("\n[CSharp]");
+                    AnsiConsole.MarkupLine("\n[grey]C#[/]");
                     messageShown = true;
                 }
             }
@@ -1345,23 +1308,21 @@ class Program
                 string eulaContent = File.ReadAllText(eulaPath2);
                 if (eulaContent.Contains("eula=false"))
                 {
-                    Console.WriteLine("\nYou must accept the Minecraft EULA to run the server.");
-                    Console.Write("Do you want to accept the EULA now? (yes/no): ");
-                    string input = Console.ReadLine();
-                    if (input.Trim().ToLower() == "yes")
+                    AnsiConsole.MarkupLine("\n[yellow]You must accept the Minecraft EULA to run the server.[/]");
+                    bool accept = AnsiConsole.Confirm("Do you want to accept the EULA now?");
+                    if (accept)
                     {
                         File.WriteAllText(eulaPath2, "eula=true");
                         dbData2["eula_accepted"] = "true";
                         dbData2["eula_path"] = eulaPath2;
                         Database[name] = dbData2;
                         SaveDatabase();
-                        eulaAccepted2 = true;
-                        Console.WriteLine("\nEULA accepted. Restarting the server...\n");
+                        AnsiConsole.MarkupLine("\n[green]EULA accepted. Restarting the server...[/]\n");
                         continue;
                     }
                     else
                     {
-                        Console.WriteLine("EULA not accepted. Server will not start.");
+                        AnsiConsole.MarkupLine("[red]EULA not accepted. Server will not start.[/]");
                     }
                 }
                 else if (eulaContent.Contains("eula=true"))
@@ -1370,8 +1331,8 @@ class Program
                     dbData2["eula_path"] = eulaPath2;
                     Database[name] = dbData2;
                     SaveDatabase();
-                    Console.WriteLine("\nServer stopped. You can now manage your server from the menu.");
-                    Console.WriteLine("\nPress any key to return to the menu.");
+                    AnsiConsole.MarkupLine("\n[green]Server stopped. You can now manage your server from the menu.[/]");
+                    AnsiConsole.MarkupLine("\n[grey]Press any key to return to the menu.[/]");
                 }
             }
             break;
